@@ -1,0 +1,71 @@
+{
+  "creator": {
+    "username": "ajay_shenoy",
+    "user_id": 61820,
+    "name": "Ajay Shenoy",
+    "premium_user": true,
+    "joined_date": "2024-06-18",
+    "followers": 2562,
+    "total_bookings": 18361
+  },
+  "reputation": {
+    "average_rating": 4.8,
+    "total_ratings": 795,
+    "reviews_count": 778,
+    "testimonials_count": 656,
+    "badges": [
+      "People's Choice (5+ bookings)",
+      "Popular (500+ views)",
+      "Top 0.1% (Best of Best)",
+      "18,359+ bookings"
+    ]
+  },
+  "qualities": {
+    "insightful": 450,
+    "helpful": 258,
+    "friendly": 209
+  },
+  "current_offering": {
+    "course_name": "Building Agents in Enterprise - December Cohort",
+    "type": "cohort",
+    "format": "live_sessions",
+    "duration": "6 weeks",
+    "start_date": "2024-12-06",
+    "schedule": {
+      "days": ["Saturday", "Sunday"],
+      "morning_batch": "8:00-10:00 AM IST",
+      "evening_batch": "8:00-10:00 PM IST",
+      "flexibility": "Choose batch daily"
+    },
+    "pricing": {
+      "amount_inr": 50000,
+      "amount_usd": 600,
+      "follower_rate": 50000
+    },
+    "current_bookings": 153,
+    "cta": "Enroll Today"
+  },
+  "value_propositions": [
+    "Top 0.1% instructor with 18,361+ successful sessions",
+    "4.8/5 rating from 795+ students",
+    "Known for being Insightful, Helpful, and Friendly",
+    "Live cohort with flexible morning/evening batches",
+    "Learn cutting-edge AI agent development",
+    "6 weeks of hands-on enterprise experience",
+    "Join 153 other professionals already enrolled"
+  ],
+  "target_audience": [
+    "Software engineers interested in AI",
+    "Product managers exploring AI integration",
+    "Tech leads building AI capabilities",
+    "Entrepreneurs wanting to leverage AI agents",
+    "Professionals upskilling in AI/ML"
+  ],
+  "pain_points_addressed": [
+    "Understanding enterprise-grade AI agents",
+    "Practical implementation vs theory",
+    "Building production-ready agents",
+    "Learning from an experienced practitioner",
+    "Flexible schedule for working professionals"
+  ]
+}
