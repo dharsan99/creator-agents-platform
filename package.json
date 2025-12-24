@@ -1,0 +1,26 @@
+{
+  "name": "creator-agents-platform",
+  "version": "1.0.0",
+  "description": "Creator Agents Platform - Frontend Dashboard",
+  "main": "frontend_server.js",
+  "scripts": {
+    "frontend": "node frontend_server.js",
+    "dev": "nodemon frontend_server.js",
+    "start": "node frontend_server.js"
+  },
+  "keywords": [
+    "creator",
+    "agents",
+    "dashboard",
+    "platform"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

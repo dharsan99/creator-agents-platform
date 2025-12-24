@@ -1,4 +1,5 @@
 """Event domain service."""
+import logging
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
@@ -7,6 +8,9 @@ from sqlmodel import Session, select
 from app.infra.db.models import Event
 from app.domain.schemas import EventCreate, EventResponse
 from app.domain.types import EventType
+from app.domain.events.deduplication import EventDeduplicator
+
+logger = logging.getLogger(__name__)
 
 
 class EventService:
@@ -16,7 +20,30 @@ class EventService:
         self.session = session
 
     def create_event(self, creator_id: UUID, data: EventCreate) -> Event:
-        """Create and persist an event."""
+        """Create and persist an event with deduplication.
+
+        Checks for duplicate events before creation to prevent reprocessing
+        of the same logical event.
+        """
+        # Check for duplicates
+        is_duplicate = EventDeduplicator.is_duplicate(
+            self.session,
+            creator_id,
+            data.consumer_id,
+            data.type.value,
+            data.payload,
+        )
+
+        if is_duplicate:
+            logger.info(
+                f"Skipping duplicate event: {data.type.value} for consumer {data.consumer_id}"
+            )
+            # Return existing event
+            idempotency_key = EventDeduplicator.generate_idempotency_key(
+                creator_id, data.consumer_id, data.type.value, data.payload
+            )
+            return EventDeduplicator.get_existing_event(self.session, idempotency_key)
+
         event = Event(
             creator_id=creator_id,
             consumer_id=data.consumer_id,
@@ -25,6 +52,12 @@ class EventService:
             timestamp=data.timestamp,
             payload=data.payload,
         )
+
+        # Mark with idempotency key
+        EventDeduplicator.mark_event_with_key(
+            event, creator_id, data.consumer_id, data.type.value, data.payload
+        )
+
         self.session.add(event)
         self.session.commit()
         self.session.refresh(event)

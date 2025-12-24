@@ -6,9 +6,11 @@ from app.domain.channels.email import EmailChannel
 from app.domain.channels.whatsapp import WhatsAppChannel
 from app.domain.channels.call import CallChannel
 from app.domain.channels.payment import PaymentChannel
+from app.domain.channels.redpanda import RedpandaChannel
 from app.domain.types import Channel
 from app.infra.external.ses_client import SESClient
 from app.infra.external.twilio_client import TwilioClient
+from app.infra.events.producer import get_producer
 
 
 class ChannelRegistry:
@@ -34,6 +36,10 @@ class ChannelRegistry:
 
         # Payment channel
         self._channels[Channel.PAYMENT] = PaymentChannel(self.session)
+
+        # Redpanda channel
+        producer = get_producer()
+        self._channels[Channel.REDPANDA] = RedpandaChannel(producer)
 
     def get_channel(self, channel: Channel) -> ChannelTool:
         """Get channel tool by type."""

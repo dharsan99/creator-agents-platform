@@ -18,9 +18,17 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
-    # OpenAI
+    # Redpanda (Phase 2)
+    redpanda_brokers: str = "localhost:9092"
+
+    # External Services (Phase 2)
+    onboarding_service_url: str = "http://localhost:8000"
+
+    # OpenAI (supports OpenRouter via base URL)
     openai_api_key: str
     openai_model: str = "gpt-4-turbo-preview"
+    openai_api_base: Optional[str] = None
+    openai_model_name: Optional[str] = None
 
     # AWS SES
     aws_access_key_id: Optional[str] = None
@@ -32,6 +40,11 @@ class Settings(BaseSettings):
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_whatsapp_from: Optional[str] = None
+
+    # SuprSend
+    suprsend_workspace_key: Optional[str] = None
+    suprsend_workspace_secret: Optional[str] = None
+    is_staging_env: bool = False
 
     # Security
     secret_key: str

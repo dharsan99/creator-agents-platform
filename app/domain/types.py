@@ -4,6 +4,7 @@ from enum import Enum
 
 class EventType(str, Enum):
     """Types of events in the system."""
+    # Consumer interaction events
     PAGE_VIEW = "page_view"
     SERVICE_CLICK = "service_click"
     BOOKING_CREATED = "booking_created"
@@ -11,6 +12,7 @@ class EventType(str, Enum):
     PAYMENT_SUCCESS = "payment_success"
     PAYMENT_FAILED = "payment_failed"
     EMAIL_SENT = "email_sent"
+    EMAIL_DELIVERED = "email_delivered"
     EMAIL_OPENED = "email_opened"
     EMAIL_CLICKED = "email_clicked"
     EMAIL_REPLIED = "email_replied"
@@ -19,6 +21,13 @@ class EventType(str, Enum):
     CALL_SCHEDULED = "call_scheduled"
     CALL_COMPLETED = "call_completed"
     AGENT_ACTION = "agent_action"
+
+    # Orchestration events (Phase 3: Supervisor-Worker Architecture)
+    CREATOR_ONBOARDED = "creator_onboarded"
+    WORKFLOW_METRIC_UPDATE = "workflow_metric_update"
+    WORKER_TASK_ASSIGNED = "worker_task_assigned"
+    WORKER_TASK_COMPLETED = "worker_task_completed"
+    WORKFLOW_STATE_CHANGE = "workflow_state_change"
 
 
 class EventSource(str, Enum):
@@ -51,6 +60,7 @@ class Channel(str, Enum):
     WHATSAPP = "whatsapp"
     CALL = "call"
     PAYMENT = "payment"
+    REDPANDA = "redpanda"  # For publishing events to Redpanda topics
 
 
 class ActionType(str, Enum):
@@ -59,6 +69,7 @@ class ActionType(str, Enum):
     SEND_WHATSAPP = "send_whatsapp"
     SCHEDULE_CALL = "schedule_call"
     SEND_PAYMENT_LINK = "send_payment_link"
+    PUBLISH_EVENT = "publish_event"  # For publishing events to Redpanda
 
 
 class ActionStatus(str, Enum):

@@ -34,6 +34,11 @@ class CreatorService:
         statement = select(Creator).where(Creator.email == email)
         return self.session.exec(statement).first()
 
+    def list_creators(self) -> list[Creator]:
+        """List all creators."""
+        statement = select(Creator).order_by(Creator.created_at.desc())
+        return list(self.session.exec(statement).all())
+
     def update_settings(self, creator_id: UUID, settings: dict) -> Creator:
         """Update creator settings."""
         creator = self.get_creator(creator_id)

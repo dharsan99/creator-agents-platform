@@ -96,6 +96,70 @@ class PolicyService:
             violations=violations,
         )
 
+    def validate_tool_call(
+        self,
+        creator_id: UUID,
+        consumer_id: UUID,
+        tool_name: str,
+        params: dict,
+    ) -> PolicyDecision:
+        """
+        Validate if a tool call should be approved
+
+        Similar to validate_action but for runtime tool execution.
+        Checks consent and rate limits for communication tools.
+
+        Args:
+            creator_id: Creator context
+            consumer_id: Consumer context
+            tool_name: Name of the tool being called
+            params: Tool parameters
+
+        Returns:
+            PolicyDecision with approval status
+        """
+        violations = []
+
+        # Map tool names to channels for policy checking
+        tool_to_channel = {
+            "send_email": Channel.EMAIL,
+            "send_whatsapp": Channel.WHATSAPP,
+            "send_sms": Channel.WHATSAPP,  # Use WhatsApp policies for SMS
+            "schedule_call": Channel.CALL,
+        }
+
+        channel = tool_to_channel.get(tool_name)
+
+        # Only validate communication tools
+        if channel:
+            # Check consent
+            consent_check = self._check_consent(creator_id, consumer_id, channel)
+            if not consent_check:
+                violations.append(f"No consent for {channel.value}")
+
+            # Check rate limits by creating a mock PlannedAction
+            mock_action = PlannedAction(
+                action_type="tool_call",
+                channel=channel,
+                payload=params,
+                send_at=datetime.utcnow(),
+                priority=1.0
+            )
+
+            rate_limit_check = self._check_rate_limits(creator_id, consumer_id, mock_action)
+            if rate_limit_check:
+                violations.append(rate_limit_check)
+
+            # Note: We don't check quiet hours for immediate tool calls
+            # Quiet hours only apply to scheduled actions
+
+        approved = len(violations) == 0
+        return PolicyDecision(
+            approved=approved,
+            reason=None if approved else "; ".join(violations),
+            violations=violations,
+        )
+
     def _check_consent(
         self, creator_id: UUID, consumer_id: UUID, channel: Channel
     ) -> bool:

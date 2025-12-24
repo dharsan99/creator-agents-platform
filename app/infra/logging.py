@@ -1,8 +1,10 @@
-"""Structured logging with correlation IDs."""
+"""Structured logging with correlation IDs and JSON formatting."""
+import json
 import logging
 import uuid
 from contextvars import ContextVar
-from typing import Optional
+from datetime import datetime
+from typing import Optional, Dict, Any
 
 # Context variables for correlation IDs
 correlation_id_var: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
@@ -25,8 +27,55 @@ class CorrelationIdFilter(logging.Filter):
         return True
 
 
-def setup_logging():
-    """Configure structured logging with correlation IDs."""
+class JSONFormatter(logging.Formatter):
+    """JSON formatter for structured logging.
+
+    Formats log records as JSON for better machine parsing and log aggregation.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format log record as JSON."""
+        log_data: Dict[str, Any] = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+        }
+
+        # Add correlation IDs if present
+        if hasattr(record, "correlation_id") and record.correlation_id != "-":
+            log_data["correlation_id"] = record.correlation_id
+        if hasattr(record, "creator_id") and record.creator_id != "-":
+            log_data["creator_id"] = record.creator_id
+        if hasattr(record, "consumer_id") and record.consumer_id != "-":
+            log_data["consumer_id"] = record.consumer_id
+        if hasattr(record, "event_id") and record.event_id != "-":
+            log_data["event_id"] = record.event_id
+        if hasattr(record, "invocation_id") and record.invocation_id != "-":
+            log_data["invocation_id"] = record.invocation_id
+
+        # Add exception info if present
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+
+        # Add extra fields if present
+        if hasattr(record, "extra") and isinstance(record.extra, dict):
+            log_data["extra"] = record.extra
+
+        return json.dumps(log_data)
+
+
+def setup_logging(use_json: bool = False):
+    """Configure structured logging with correlation IDs.
+
+    Args:
+        use_json: If True, use JSON formatter for machine parsing.
+                  If False, use human-readable formatter.
+                  Defaults to False (human-readable).
+    """
     # Add filter to root logger
     correlation_filter = CorrelationIdFilter()
 
@@ -34,16 +83,21 @@ def setup_logging():
     for handler in root_logger.handlers:
         handler.addFilter(correlation_filter)
 
-    # Update format to include correlation IDs
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - "
-        "[correlation_id=%(correlation_id)s] "
-        "[creator_id=%(creator_id)s] "
-        "[consumer_id=%(consumer_id)s] "
-        "[event_id=%(event_id)s] "
-        "[invocation_id=%(invocation_id)s] - "
-        "%(message)s"
-    )
+    # Choose formatter based on configuration
+    if use_json:
+        # JSON formatter for production/log aggregation
+        formatter = JSONFormatter()
+    else:
+        # Human-readable formatter for development
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - "
+            "[correlation_id=%(correlation_id)s] "
+            "[creator_id=%(creator_id)s] "
+            "[consumer_id=%(consumer_id)s] "
+            "[event_id=%(event_id)s] "
+            "[invocation_id=%(invocation_id)s] - "
+            "%(message)s"
+        )
 
     for handler in root_logger.handlers:
         handler.setFormatter(formatter)

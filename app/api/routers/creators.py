@@ -30,6 +30,16 @@ def create_creator(
     return CreatorResponse.model_validate(creator)
 
 
+@router.get("", response_model=list[CreatorResponse])
+def list_creators(
+    session: SessionDep,
+) -> list[CreatorResponse]:
+    """List all creators (admin endpoint for dashboard)."""
+    service = CreatorService(session)
+    creators = service.list_creators()
+    return [CreatorResponse.model_validate(creator) for creator in creators]
+
+
 @router.get("/me", response_model=CreatorResponse)
 def get_current_creator(
     creator_id: CreatorIdDep,

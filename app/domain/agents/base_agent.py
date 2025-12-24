@@ -120,6 +120,163 @@ class BaseAgent(ABC):
         """
         return {}
 
+    # ==================== Tool Calling ====================
+    # NEW: Call tools during agent execution (not just plan actions)
+
+    def call_tool(
+        self,
+        tool_name: str,
+        creator_id: Optional["UUID"] = None,
+        consumer_id: Optional["UUID"] = None,
+        **kwargs
+    ):
+        """
+        Call a tool during agent execution (Phase 1: Dynamic Tool Calling)
+
+        This is NEW functionality that allows agents to execute tools
+        during reasoning, not just plan actions for later.
+
+        Args:
+            tool_name: Name of the tool (e.g., "send_email", "get_consumer_context")
+            creator_id: Optional creator context for policy validation
+            consumer_id: Optional consumer context for policy validation
+            **kwargs: Tool-specific parameters
+
+        Returns:
+            ToolResult with success status, data, error, and metadata
+
+        Example:
+            # Get consumer context during execution
+            result = self.call_tool(
+                "get_consumer_context",
+                consumer_id=consumer.id,
+                creator_id=creator.id
+            )
+            if result.success:
+                stage = result.data["stage"]
+                metrics = result.data["metrics"]
+
+            # Send email immediately
+            result = self.call_tool(
+                "send_email",
+                creator_id=creator.id,
+                consumer_id=consumer.id,
+                to="user@example.com",
+                subject="Hello",
+                body="Welcome to our platform!"
+            )
+
+        Note:
+            - Tools execute with 30-second timeout by default
+            - Policy validation applied (rate limits, consent)
+            - Tool usage logged for analytics
+            - If tool unavailable, MissingToolLogger tracks the need
+        """
+        from app.domain.tools.executor import ToolExecutor
+        from app.domain.tools.missing_tools import MissingToolLogger
+        from app.domain.tools.registry import get_registry
+        from app.infra.db.connection import get_session
+        from uuid import UUID as UUIDType
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        # Get database session
+        try:
+            session = next(get_session())
+        except:
+            logger.error("Failed to get database session for tool call")
+            from app.domain.tools.base import ToolResult
+            from datetime import datetime
+            return ToolResult(
+                success=False,
+                data=None,
+                error="Database session unavailable",
+                execution_time_ms=0,
+                tool_name=tool_name,
+                timestamp=datetime.utcnow()
+            )
+
+        # Check if tool exists
+        registry = get_registry()
+        tool = registry.get_tool(tool_name)
+
+        if tool is None:
+            # Tool doesn't exist - log for future implementation
+            logger.warning(f"Agent requested non-existent tool: {tool_name}")
+
+            missing_logger = MissingToolLogger(session)
+            missing_logger.log_missing_tool(
+                tool_name=tool_name,
+                use_case=f"Called by {self.name} agent",
+                agent_id=self.config.get("agent_id"),
+                creator_id=creator_id,
+                priority="medium",
+                category=kwargs.get("category", "unknown")
+            )
+
+            from app.domain.tools.base import ToolResult
+            from datetime import datetime
+            return ToolResult(
+                success=False,
+                data=None,
+                error=f"Tool '{tool_name}' not found. Request logged for future implementation.",
+                execution_time_ms=0,
+                tool_name=tool_name,
+                timestamp=datetime.utcnow()
+            )
+
+        if not tool.is_available:
+            # Tool exists but unavailable - log it
+            logger.warning(f"Agent requested unavailable tool: {tool_name}")
+
+            missing_logger = MissingToolLogger(session)
+            missing_logger.log_missing_tool(
+                tool_name=tool_name,
+                use_case=f"Tool exists but unavailable for {self.name} agent",
+                agent_id=self.config.get("agent_id"),
+                creator_id=creator_id,
+                priority="high",  # Higher priority since it's registered but broken
+                category=tool.category,
+                notes="Tool is registered but check_availability() returned False"
+            )
+
+        # Execute tool via ToolExecutor
+        try:
+            from app.domain.policy.service import PolicyService
+
+            policy_service = PolicyService(session) if creator_id and consumer_id else None
+
+            executor = ToolExecutor(
+                session=session,
+                policy_service=policy_service,
+                registry=registry
+            )
+
+            result = executor.execute(
+                tool_name=tool_name,
+                creator_id=creator_id,
+                consumer_id=consumer_id,
+                agent_id=self.config.get("agent_id"),
+                **kwargs
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Tool execution error: {e}", exc_info=True)
+
+            from app.domain.tools.base import ToolResult
+            from datetime import datetime
+            return ToolResult(
+                success=False,
+                data=None,
+                error=str(e),
+                execution_time_ms=0,
+                tool_name=tool_name,
+                timestamp=datetime.utcnow()
+            )
+
     # ==================== Helper Methods ====================
     # Use these to easily create actions in plan_actions()
 

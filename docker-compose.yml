@@ -1,98 +1,196 @@
 version: '3.8'
 
 services:
-  # PostgreSQL database
-  postgres:
-    image: postgres:15-alpine
-    container_name: creator-agents-db
-    environment:
-      POSTGRES_DB: creator_agents
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Redis for queues
-  redis:
-    image: redis:7-alpine
-    container_name: creator-agents-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # FastAPI application
   api:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: creator-agents-api
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -c "python scripts/create_tables.py && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/creator_agents
-      REDIS_URL: redis://redis:6379/0
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      DATABASE_URL: postgresql://postgres:postgres@shared-postgres-db:5432/creator_agents
+      REDIS_URL: redis://shared-redis:6379/0
+      REDPANDA_BROKERS: shared-redpanda:9092
+      ONBOARDING_SERVICE_URL: http://creator-onboarding-backend:8000
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-test-key}
+      OPENAI_API_BASE: ${OPENAI_API_BASE:-}
+      OPENAI_MODEL_NAME: ${OPENAI_MODEL_NAME:-gpt-4}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
       AWS_REGION: ${AWS_REGION:-us-east-1}
-      SES_SENDER_EMAIL: ${SES_SENDER_EMAIL}
-      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
-      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
-      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM}
+      SES_SENDER_EMAIL: ${SES_SENDER_EMAIL:-noreply@example.com}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-test}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-test}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-whatsapp:+14155238886}
       SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
       ENV: development
       LOG_LEVEL: INFO
     ports:
-      - "8000:8000"
+      - "8002:8000"
     volumes:
       - .:/app
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    networks:
+      - creator-agents
+      - shared-db-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # RQ Worker for background jobs
-  worker:
+  # Taskiq Worker for background jobs and event processing
+  taskiq-worker:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: creator-agents-worker
-    command: python -m app.infra.queues.worker
+    container_name: creator-agents-taskiq-worker
+    command: taskiq worker app.infra.queues.taskiq_broker:broker --log-level=INFO
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/creator_agents
-      REDIS_URL: redis://redis:6379/0
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      DATABASE_URL: postgresql://postgres:postgres@shared-postgres-db:5432/creator_agents
+      REDIS_URL: redis://shared-redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-test-key}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
       AWS_REGION: ${AWS_REGION:-us-east-1}
-      SES_SENDER_EMAIL: ${SES_SENDER_EMAIL}
-      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
-      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
-      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM}
+      SES_SENDER_EMAIL: ${SES_SENDER_EMAIL:-noreply@example.com}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-test}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-test}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-whatsapp:+14155238886}
       SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
       ENV: development
       LOG_LEVEL: INFO
     volumes:
       - .:/app
+    networks:
+      - creator-agents
+      - shared-db-network
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - api
+    restart: on-failure
 
-volumes:
-  postgres_data:
-  redis_data:
+  # Frontend server
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: creator-agents-frontend
+    ports:
+      - "3002:3000"
+    environment:
+      NODE_ENV: development
+    depends_on:
+      - api
+    volumes:
+      - ./frontend:/app/frontend
+      - ./frontend_server.js:/app/frontend_server.js
+    networks:
+      - creator-agents
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =========================================================================
+  # Redpanda Event Consumer Services (Phase 2)
+  # =========================================================================
+  # Multiple consumer groups for priority-based event processing
+
+  # High-Priority Consumer - Handles CRITICAL and HIGH priority events
+  high-priority-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: creator-agents-high-priority-consumer
+    command: python -m app.services.event_consumer_service
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@shared-postgres-db:5432/creator_agents
+      REDIS_URL: redis://shared-redis:6379/0
+      REDPANDA_BROKERS: shared-redpanda:9092
+      ONBOARDING_SERVICE_URL: http://creator-onboarding-backend:8000
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-test-key}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SES_SENDER_EMAIL: ${SES_SENDER_EMAIL:-noreply@example.com}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-test}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-test}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-whatsapp:+14155238886}
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      ENV: development
+      LOG_LEVEL: INFO
+    volumes:
+      - .:/app
+    networks:
+      - creator-agents
+      - shared-db-network
+    depends_on:
+      - api
+    restart: unless-stopped
+    labels:
+      description: "High-priority event consumer (creator_onboarded, critical_alerts)"
+
+  # Worker Task Consumer - Handles tasks delegated to worker agents
+  worker-task-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: creator-agents-worker-task-consumer
+    command: python -m app.services.worker_task_consumer
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@shared-postgres-db:5432/creator_agents
+      REDIS_URL: redis://shared-redis:6379/0
+      REDPANDA_BROKERS: shared-redpanda:9092
+      ONBOARDING_SERVICE_URL: http://creator-onboarding-backend:8000
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-test-key}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SES_SENDER_EMAIL: ${SES_SENDER_EMAIL:-noreply@example.com}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-test}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-test}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-whatsapp:+14155238886}
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      ENV: development
+      LOG_LEVEL: INFO
+    volumes:
+      - .:/app
+    networks:
+      - creator-agents
+      - shared-db-network
+    depends_on:
+      - api
+    restart: unless-stopped
+    labels:
+      description: "Worker task consumer (supervisor_tasks, task_results)"
+
+  # Batch Processing Consumer - Handles batch and low-priority events
+  batch-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: creator-agents-batch-consumer
+    command: python -m app.services.batch_consumer
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@shared-postgres-db:5432/creator_agents
+      REDIS_URL: redis://shared-redis:6379/0
+      REDPANDA_BROKERS: shared-redpanda:9092
+      ENV: development
+      LOG_LEVEL: INFO
+    volumes:
+      - .:/app
+    networks:
+      - creator-agents
+      - shared-db-network
+    depends_on:
+      - api
+    restart: unless-stopped
+    labels:
+      description: "Batch processing consumer (analytics, scheduled tasks, audit)"
+
+networks:
+  creator-agents:
+    driver: bridge
+  shared-db-network:
+    external: true

@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database (shared by both services)
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: dharsankumar
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: creator_agents
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dharsankumar"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis (for background jobs)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Creator Agents Platform API
+  creator-agents-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://dharsankumar:postgres@postgres:5432/creator_agents
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE}
+      - OPENAI_MODEL_NAME=${OPENAI_MODEL_NAME}
+      - SUPRSEND_WORKSPACE_KEY=${SUPRSEND_WORKSPACE_KEY}
+      - SUPRSEND_WORKSPACE_SECRET=${SUPRSEND_WORKSPACE_SECRET}
+      - IS_STAGING_ENV=true
+      - ENV=development
+      - LOG_LEVEL=INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Email Mock Service
+  email-mock-service:
+    build:
+      context: ../email-services
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://dharsankumar:postgres@postgres:5432/email_service
+      - SERVICE_PORT=8001
+      - SUPRSEND_WORKSPACE_KEY=${SUPRSEND_WORKSPACE_KEY}
+      - SUPRSEND_API_KEY=${SUPRSEND_WORKSPACE_KEY}
+      - SUPRSEND_API_SECRET=${SUPRSEND_WORKSPACE_SECRET}
+      - SUPRSEND_WEBHOOK_URL=http://creator-agents-api:8000/webhooks/email/status
+      - ENABLE_AUTO_SIMULATION=true
+      - SIMULATION_DELAY_SECONDS=5
+      - RATIO_UNREAD=70.0
+      - RATIO_READ=20.0
+      - RATIO_REPLIED=2.0
+      - RATIO_CLICK_CTA=5.0
+      - RATIO_BOOKING_CLICK=2.0
+      - RATIO_BOOKING_DONE=1.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      creator-agents-api:
+        condition: service_started
+    volumes:
+      - ../email-services/app:/app/app
+
+volumes:
+  postgres_data:

@@ -1,22 +1,23 @@
-"""API router for creator onboarding."""
+"""API router for creator onboarding and agent management.
+
+UPDATED FOR SUPERVISOR-WORKER ARCHITECTURE:
+- Creator onboarding happens in creator-onboarding-service (external)
+- This service receives creator_onboarded events via Redpanda
+- MainAgent is global (deployed once, works for all creators)
+- Creator profiles fetched on-demand from onboarding service
+"""
 import logging
-from typing import Annotated
+from typing import Annotated, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlmodel import Session
+from pydantic import BaseModel, Field
+from sqlmodel import Session, select
 
-from app.api.deps import get_session
-from app.domain.onboarding.service import OnboardingService
-from app.domain.onboarding.agent_deployment import AgentDeploymentService
-from app.domain.schemas import (
-    OnboardingRequest,
-    OnboardingResponse,
-    CreatorProfileResponse,
-    SyncProfileRequest,
-    SyncProfileResponse,
-    AgentResponse,
-)
+from app.api.dependencies import get_session
+from app.infra.external.onboarding_client import get_onboarding_client, OnboardingServiceClient
+from app.infra.db.models import Agent
+from app.domain.schemas import AgentResponse
 
 logger = logging.getLogger(__name__)
 
@@ -25,276 +26,255 @@ router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
-@router.post("/", response_model=OnboardingResponse, status_code=status.HTTP_201_CREATED)
-def onboard_creator(
-    request: OnboardingRequest,
-    session: SessionDep,
-):
-    """Onboard a creator by fetching their data and generating LLM profile.
+# Response Models
 
-    This endpoint:
-    1. Fetches creator data from external API (Topmate)
-    2. Uses LLM to generate comprehensive, sales-optimized profile documentation
-    3. Stores everything in the database
-    4. Returns profile highlights
+class CreatorProfileResponse(BaseModel):
+    """Response model for creator profile (proxied from onboarding service)."""
+    creator_id: UUID
+    external_username: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+    services: list = Field(default_factory=list)
+    sales_pitch: Optional[str] = None
+    target_audience: Optional[str] = None
+    created_at: Optional[str] = None
 
-    Args:
-        request: Onboarding request with username and optional name/email
-        session: Database session
+    class Config:
+        from_attributes = True
 
-    Returns:
-        OnboardingResponse with creator ID, profile ID, and profile highlights
 
-    Raises:
-        HTTPException: If creator not found or onboarding fails
-    """
-    service = OnboardingService(session)
+class MainAgentDeploymentResponse(BaseModel):
+    """Response for MainAgent deployment."""
+    success: bool
+    message: str
+    agent_id: UUID
+    agent_name: str
+    enabled: bool
+    triggers: list[str]
+    created_at: str
 
-    try:
-        logger.info(f"Starting onboarding for username: {request.username}")
 
-        # Onboard the creator
-        creator, profile = service.onboard_creator(
-            external_username=request.username,
-            creator_name=request.name,
-            creator_email=request.email,
-        )
-
-        # Get the onboarding log to extract processing time
-        from app.infra.db.creator_profile_models import OnboardingLog
-        from sqlmodel import select, desc
-
-        log_stmt = select(OnboardingLog).where(
-            OnboardingLog.external_username == request.username,
-            OnboardingLog.status == "completed"
-        ).order_by(desc(OnboardingLog.created_at)).limit(1)
-
-        log = session.exec(log_stmt).first()
-        processing_time = log.processing_time_seconds if log else 0.0
-
-        logger.info(f"Successfully onboarded {request.username} in {processing_time:.2f}s")
-
-        return OnboardingResponse(
-            success=True,
-            message=f"Successfully onboarded {request.username}",
-            creator_id=creator.id,
-            profile_id=profile.id,
-            external_username=request.username,
-            processing_time_seconds=processing_time,
-            llm_summary=profile.llm_summary,
-            sales_pitch=profile.sales_pitch,
-            services=profile.services,
-            value_propositions=profile.value_propositions,
-        )
-
-    except ValueError as e:
-        logger.error(f"Validation error during onboarding: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
-    except Exception as e:
-        logger.error(f"Error during onboarding: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Onboarding failed: {str(e)}"
-        )
-
+# API Endpoints
 
 @router.get("/profile/{creator_id}", response_model=CreatorProfileResponse)
-def get_creator_profile(
+async def get_creator_profile(
     creator_id: UUID,
     session: SessionDep,
 ):
-    """Get creator profile by creator ID.
+    """Get creator profile by ID (proxied from onboarding service).
+
+    This endpoint fetches creator profile data on-demand from the
+    creator-onboarding-service. No local database sync.
 
     Args:
         creator_id: Creator UUID
-        session: Database session
 
     Returns:
-        CreatorProfileResponse with complete profile data
+        Creator profile data
 
     Raises:
-        HTTPException: If profile not found
+        404: Creator profile not found
+        503: Onboarding service unavailable
     """
-    service = OnboardingService(session)
-
-    profile = service.get_creator_profile(creator_id)
-
-    if not profile:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Profile not found for creator {creator_id}"
-        )
-
-    return CreatorProfileResponse(
-        id=profile.id,
-        creator_id=profile.creator_id,
-        external_username=profile.external_username,
-        llm_summary=profile.llm_summary,
-        sales_pitch=profile.sales_pitch,
-        target_audience_description=profile.target_audience_description,
-        value_propositions=profile.value_propositions,
-        services=profile.services,
-        pricing_info=profile.pricing_info,
-        ratings=profile.ratings,
-        social_proof=profile.social_proof,
-        agent_instructions=profile.agent_instructions,
-        objection_handling=profile.objection_handling,
-        last_synced_at=profile.last_synced_at,
-        created_at=profile.created_at,
-    )
-
-
-@router.post("/sync", response_model=SyncProfileResponse)
-def sync_creator_profile(
-    request: SyncProfileRequest,
-    session: SessionDep,
-):
-    """Re-sync creator profile with latest data from external API.
-
-    This endpoint:
-    1. Fetches latest data from external API
-    2. Regenerates LLM profile documentation
-    3. Updates the profile in database
-
-    Args:
-        request: Sync request with creator ID
-        session: Database session
-
-    Returns:
-        SyncProfileResponse with updated profile
-
-    Raises:
-        HTTPException: If profile not found or sync fails
-    """
-    service = OnboardingService(session)
-
     try:
-        logger.info(f"Starting profile sync for creator: {request.creator_id}")
+        client = get_onboarding_client()
+        profile = client.get_creator_profile(creator_id)
 
-        profile = service.sync_creator_profile(request.creator_id)
-
-        logger.info(f"Successfully synced profile for creator {request.creator_id}")
-
-        return SyncProfileResponse(
-            success=True,
-            message="Profile synced successfully",
-            profile=CreatorProfileResponse(
-                id=profile.id,
-                creator_id=profile.creator_id,
-                external_username=profile.external_username,
-                llm_summary=profile.llm_summary,
-                sales_pitch=profile.sales_pitch,
-                target_audience_description=profile.target_audience_description,
-                value_propositions=profile.value_propositions,
-                services=profile.services,
-                pricing_info=profile.pricing_info,
-                ratings=profile.ratings,
-                social_proof=profile.social_proof,
-                agent_instructions=profile.agent_instructions,
-                objection_handling=profile.objection_handling,
-                last_synced_at=profile.last_synced_at,
-                created_at=profile.created_at,
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Creator profile not found: {creator_id}"
             )
+
+        logger.info(f"Retrieved creator profile: {creator_id}")
+
+        return CreatorProfileResponse(
+            creator_id=creator_id,
+            external_username=profile.external_username,
+            name=profile.name,
+            email=profile.email,
+            services=profile.services,
+            sales_pitch=profile.sales_pitch,
+            target_audience=profile.target_audience,
+            created_at=profile.created_at.isoformat() if profile.created_at else None,
         )
 
-    except ValueError as e:
-        logger.error(f"Validation error during sync: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error during profile sync: {e}")
+        logger.error(f"Failed to get creator profile: {e}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Profile sync failed: {str(e)}"
-        )
-
-
-@router.post("/deploy-agent/{creator_id}", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
-def deploy_sales_agent(
-    creator_id: UUID,
-    session: SessionDep,
-):
-    """Deploy a GenericSalesAgent for a creator.
-
-    This endpoint creates and configures a sales agent that will automatically:
-    - Reach out to new leads who visit the creator's page
-    - Follow up with returning leads
-    - Send enrollment messages when leads click on services
-
-    The agent uses the creator's LLM-generated profile (sales pitch, instructions,
-    objection handling) to personalize all outreach.
-
-    Args:
-        creator_id: Creator UUID
-        session: Database session
-
-    Returns:
-        AgentResponse with created agent details
-
-    Raises:
-        HTTPException: If creator or profile not found
-    """
-    from app.infra.db.models import Creator
-
-    logger.info(f"Deploying sales agent for creator: {creator_id}")
-
-    # Get creator
-    creator = session.get(Creator, creator_id)
-    if not creator:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Creator {creator_id} not found"
-        )
-
-    # Get profile
-    onboarding_service = OnboardingService(session)
-    profile = onboarding_service.get_creator_profile(creator_id)
-
-    if not profile:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Profile not found for creator {creator_id}. Please onboard the creator first."
-        )
-
-    # Deploy agent
-    deployment_service = AgentDeploymentService(session)
-
-    try:
-        agent = deployment_service.deploy_sales_agent(creator, profile)
-
-        logger.info(f"Successfully deployed agent {agent.id} for creator {creator_id}")
-
-        return AgentResponse.model_validate(agent)
-
-    except Exception as e:
-        logger.error(f"Error deploying agent: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Agent deployment failed: {str(e)}"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Onboarding service unavailable"
         )
 
 
 @router.get("/agents/{creator_id}", response_model=list[AgentResponse])
-def list_creator_agents(
+async def list_creator_agents(
     creator_id: UUID,
     session: SessionDep,
 ):
     """List all agents for a creator.
 
+    In the new architecture, this returns:
+    - Worker agents specific to this creator (if any)
+    - The global MainAgent (supervisor for all creators)
+
     Args:
         creator_id: Creator UUID
-        session: Database session
 
     Returns:
-        List of AgentResponse objects
+        List of agents
     """
-    deployment_service = AgentDeploymentService(session)
+    try:
+        # Get creator-specific agents
+        statement = select(Agent).where(Agent.creator_id == creator_id)
+        creator_agents = list(session.exec(statement).all())
 
-    agents = deployment_service.get_creator_agents(creator_id)
+        # Get global MainAgent
+        main_agent_stmt = select(Agent).where(
+            Agent.creator_id.is_(None),
+            Agent.name == "MainAgent"
+        )
+        main_agent = session.exec(main_agent_stmt).first()
 
-    return [AgentResponse.model_validate(agent) for agent in agents]
+        agents = creator_agents
+        if main_agent:
+            agents.append(main_agent)
+
+        logger.info(
+            f"Retrieved {len(agents)} agents for creator {creator_id}",
+            extra={
+                "creator_agents": len(creator_agents),
+                "has_main_agent": main_agent is not None
+            }
+        )
+
+        return [AgentResponse.model_validate(agent) for agent in agents]
+
+    except Exception as e:
+        logger.error(f"Failed to list creator agents: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@router.post("/admin/deploy-main-agent", response_model=MainAgentDeploymentResponse)
+async def deploy_main_agent(
+    session: SessionDep,
+):
+    """Deploy the global MainAgent (supervisor).
+
+    This is an admin-only endpoint that deploys the single global
+    MainAgent that orchestrates workflows for ALL creators.
+
+    The MainAgent:
+    - Is NOT tied to a specific creator (creator_id = None)
+    - Handles creator_onboarded events
+    - Plans workflows dynamically using LLM
+    - Delegates tasks to worker agents
+    - Monitors metrics and adjusts workflows
+
+    This endpoint should only be called once during initial setup.
+
+    Returns:
+        Deployment status
+
+    Raises:
+        409: MainAgent already exists
+        500: Deployment failed
+    """
+    try:
+        # Check if MainAgent already exists
+        statement = select(Agent).where(
+            Agent.creator_id.is_(None),
+            Agent.name == "MainAgent"
+        )
+        existing = session.exec(statement).first()
+
+        if existing:
+            logger.warning("MainAgent already exists")
+            return MainAgentDeploymentResponse(
+                success=True,
+                message="MainAgent already deployed",
+                agent_id=existing.id,
+                agent_name=existing.name,
+                enabled=existing.enabled,
+                triggers=[],
+                created_at=existing.created_at.isoformat() if existing.created_at else "",
+            )
+
+        # Deploy MainAgent using the deployment script logic
+        from app.infra.db.models import AgentTrigger
+        from datetime import datetime
+
+        logger.info("Deploying global MainAgent...")
+
+        # Create MainAgent
+        main_agent = Agent(
+            creator_id=None,  # Global agent
+            name="MainAgent",
+            implementation="simple",
+            config={
+                "agent_class": "app.agents.main_agent:MainAgent",
+                "description": "Global supervisor agent for workflow orchestration",
+                "purpose": "orchestration",
+                "capabilities": [
+                    "workflow_planning",
+                    "tool_discovery",
+                    "task_delegation",
+                    "metric_monitoring",
+                    "dynamic_adjustment"
+                ]
+            },
+            enabled=True,
+        )
+
+        session.add(main_agent)
+        session.flush()
+
+        # Create triggers for orchestration events
+        orchestration_events = [
+            "creator_onboarded",
+            "workflow_metric_update",
+            "worker_task_completed",
+            "workflow_state_change",
+        ]
+
+        for event_type in orchestration_events:
+            trigger = AgentTrigger(
+                agent_id=main_agent.id,
+                event_type=event_type,
+                filter=None,
+            )
+            session.add(trigger)
+
+        session.commit()
+        session.refresh(main_agent)
+
+        logger.info(
+            f"MainAgent deployed successfully",
+            extra={
+                "agent_id": str(main_agent.id),
+                "triggers": len(orchestration_events),
+            }
+        )
+
+        return MainAgentDeploymentResponse(
+            success=True,
+            message="MainAgent deployed successfully",
+            agent_id=main_agent.id,
+            agent_name=main_agent.name,
+            enabled=main_agent.enabled,
+            triggers=orchestration_events,
+            created_at=main_agent.created_at.isoformat() if main_agent.created_at else "",
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to deploy MainAgent: {e}", exc_info=True)
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"MainAgent deployment failed: {str(e)}"
+        )

@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Creator Agents Platform - Dashboard</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/workflow-monitor.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <i data-lucide="robot" class="logo-icon"></i>
+                    <h1>Creator Agents Platform</h1>
+                </div>
+                <div class="header-actions">
+                    <button id="healthCheckBtn" class="btn btn-secondary">
+                        <i data-lucide="activity"></i>
+                        Health Check
+                    </button>
+                    <button id="refreshBtn" class="btn btn-secondary">
+                        <i data-lucide="refresh-cw"></i>
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Stats Cards -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon" style="background-color: #6366f1;">
+                    <i data-lucide="user-plus"></i>
+                </div>
+                <div class="stat-content">
+                    <p class="stat-label">Total Creators</p>
+                    <p class="stat-value" id="totalCreators">-</p>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon" style="background-color: #10b981;">
+                    <i data-lucide="activity"></i>
+                </div>
+                <div class="stat-content">
+                    <p class="stat-label">Total Agents</p>
+                    <p class="stat-value" id="totalAgents">-</p>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon" style="background-color: #f59e0b;">
+                    <i data-lucide="users"></i>
+                </div>
+                <div class="stat-content">
+                    <p class="stat-label">Total Consumers</p>
+                    <p class="stat-value" id="totalConsumers">-</p>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon" style="background-color: #8b5cf6;">
+                    <i data-lucide="mail"></i>
+                </div>
+                <div class="stat-content">
+                    <p class="stat-label">Total Events</p>
+                    <p class="stat-value" id="totalEvents">-</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="onboarding">
+                <i data-lucide="user-plus"></i>
+                Onboard Creator
+            </button>
+            <button class="tab-btn" data-tab="deploy-agent">
+                <i data-lucide="robot"></i>
+                Deploy Agent
+            </button>
+            <button class="tab-btn" data-tab="send-event">
+                <i data-lucide="send"></i>
+                Send Event
+            </button>
+            <button class="tab-btn" data-tab="events">
+                <i data-lucide="list"></i>
+                View Events
+            </button>
+            <button class="tab-btn" data-tab="creators">
+                <i data-lucide="users"></i>
+                Creators
+            </button>
+            <button class="tab-btn" data-tab="workflow-monitor">
+                <i data-lucide="activity"></i>
+                Workflow Monitor
+            </button>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="content">
+            <!-- Onboarding Tab -->
+            <div id="onboarding-tab" class="tab-content active">
+                <div class="card">
+                    <h2>Onboard New Creator</h2>
+                    <p class="card-description">Fetch creator data from Topmate and generate LLM profile</p>
+
+                    <form id="onboardingForm" class="form">
+                        <div class="form-group">
+                            <label for="usernameInput">Creator Username</label>
+                            <input
+                                type="text"
+                                id="usernameInput"
+                                placeholder="e.g., ajay_shenoy"
+                                class="input"
+                                required
+                            />
+                            <p class="input-hint">Enter the Topmate username to onboard</p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="nameInput">Creator Name</label>
+                            <input
+                                type="text"
+                                id="nameInput"
+                                placeholder="Full name"
+                                class="input"
+                            />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="emailInput">Email</label>
+                            <input
+                                type="email"
+                                id="emailInput"
+                                placeholder="email@example.com"
+                                class="input"
+                            />
+                        </div>
+
+                        <button type="submit" class="btn btn-primary">
+                            <i data-lucide="user-plus"></i>
+                            Onboard Creator
+                        </button>
+                    </form>
+
+                    <div id="onboardingStatus" class="status-message" style="display: none;"></div>
+                    <div id="onboardingResult" class="result-card" style="display: none;"></div>
+                </div>
+            </div>
+
+            <!-- Deploy Agent Tab -->
+            <div id="deploy-agent-tab" class="tab-content">
+                <div class="card">
+                    <h2>Deploy Sales Agent</h2>
+                    <p class="card-description">Deploy GenericSalesAgent for a creator</p>
+
+                    <form id="deployAgentForm" class="form">
+                        <div class="form-group">
+                            <label for="creatorSelectDeploy">Select Creator</label>
+                            <select id="creatorSelectDeploy" class="input" required>
+                                <option value="">Choose a creator...</option>
+                            </select>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary">
+                            <i data-lucide="rocket"></i>
+                            Deploy Agent
+                        </button>
+                    </form>
+
+                    <div id="deployAgentStatus" class="status-message" style="display: none;"></div>
+                    <div id="deployAgentResult" class="result-card" style="display: none;"></div>
+                </div>
+            </div>
+
+            <!-- Send Event Tab -->
+            <div id="send-event-tab" class="tab-content">
+                <div class="card">
+                    <h2>Send Event</h2>
+                    <p class="card-description">Trigger an event for a consumer</p>
+
+                    <form id="sendEventForm" class="form">
+                        <div class="form-group">
+                            <label for="creatorSelectEvent">Select Creator</label>
+                            <select id="creatorSelectEvent" class="input" required>
+                                <option value="">Choose a creator...</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="consumerEmailInput">Consumer Email</label>
+                            <input
+                                type="email"
+                                id="consumerEmailInput"
+                                placeholder="user@example.com"
+                                class="input"
+                                required
+                            />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="eventTypeSelect">Event Type</label>
+                            <select id="eventTypeSelect" class="input" required>
+                                <option value="">Choose event type...</option>
+                                <option value="page_view">Page View</option>
+                                <option value="service_click">Service Click</option>
+                                <option value="email_sent">Email Sent</option>
+                                <option value="whatsapp_sent">WhatsApp Sent</option>
+                                <option value="booking_created">Booking Created</option>
+                            </select>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary">
+                            <i data-lucide="send"></i>
+                            Send Event
+                        </button>
+                    </form>
+
+                    <div id="sendEventStatus" class="status-message" style="display: none;"></div>
+                </div>
+            </div>
+
+            <!-- Events Tab -->
+            <div id="events-tab" class="tab-content">
+                <div class="card">
+                    <h2>Event Viewer</h2>
+                    <p class="card-description">View processed events</p>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="filterCreatorInput">Filter by Creator</label>
+                            <input
+                                type="text"
+                                id="filterCreatorInput"
+                                placeholder="creator_id or username"
+                                class="input"
+                            />
+                        </div>
+                        <button id="filterEventsBtn" class="btn btn-secondary">
+                            <i data-lucide="search"></i>
+                            Search
+                        </button>
+                    </div>
+
+                    <div id="eventsLoading" class="loading" style="display: none;">
+                        <i data-lucide="loader-2"></i>
+                        Loading events...
+                    </div>
+
+                    <div id="eventsTable" class="table-container"></div>
+
+                    <div id="eventsPagination" class="pagination" style="display: none;">
+                        <div class="pagination-info">
+                            Showing <span id="paginationRange"></span> of <span id="paginationTotal"></span> events
+                        </div>
+                        <div class="pagination-controls">
+                            <button id="firstPageBtn" class="btn btn-sm">
+                                <i data-lucide="chevrons-left"></i>
+                                First
+                            </button>
+                            <button id="prevPageBtn" class="btn btn-sm">
+                                <i data-lucide="chevron-left"></i>
+                                Prev
+                            </button>
+                            <div class="pagination-pages" id="paginationPages"></div>
+                            <button id="nextPageBtn" class="btn btn-sm">
+                                Next
+                                <i data-lucide="chevron-right"></i>
+                            </button>
+                            <button id="lastPageBtn" class="btn btn-sm">
+                                Last
+                                <i data-lucide="chevrons-right"></i>
+                            </button>
+                        </div>
+                        <div class="pagination-size">
+                            <label for="pageSizeSelect">Per page:</label>
+                            <select id="pageSizeSelect" class="input-sm">
+                                <option value="10">10</option>
+                                <option value="20" selected>20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Creators Tab -->
+            <div id="creators-tab" class="tab-content">
+                <div class="card">
+                    <h2>Onboarded Creators</h2>
+                    <p class="card-description">View all creators with their agents</p>
+
+                    <div id="creatorsLoading" class="loading" style="display: none;">
+                        <i data-lucide="loader-2"></i>
+                        Loading creators...
+                    </div>
+
+                    <div id="creatorsGrid" class="creators-grid"></div>
+                </div>
+            </div>
+
+            <!-- Workflow Monitor Tab -->
+            <div id="workflow-monitor-tab" class="tab-content">
+                <div class="card">
+                    <h2>Workflow Execution Monitor</h2>
+                    <p class="card-description">Real-time monitoring of workflow executions with stage-by-stage progress</p>
+
+                    <div class="form-group">
+                        <label for="workflowExecutionId">Execution ID</label>
+                        <input
+                            type="text"
+                            id="workflowExecutionId"
+                            placeholder="Enter workflow execution ID or leave empty to find latest"
+                            class="input"
+                        />
+                        <p class="input-hint">Leave empty to automatically monitor the latest execution</p>
+                    </div>
+
+                    <div class="button-group">
+                        <button id="startMonitorBtn" class="btn btn-primary">
+                            <i data-lucide="play"></i>
+                            Start Monitoring
+                        </button>
+                        <button id="stopMonitorBtn" class="btn btn-secondary" style="display: none;">
+                            <i data-lucide="stop-circle"></i>
+                            Stop Monitoring
+                        </button>
+                    </div>
+
+                    <div id="workflowMonitorStatus" class="alert" style="display: none;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Workflow Execution Modal -->
+        <div id="workflowModal" class="modal" style="display: none;">
+            <div class="modal-content workflow-modal">
+                <div class="modal-header">
+                    <h2>
+                        <i data-lucide="activity"></i>
+                        Workflow Execution Progress
+                    </h2>
+                    <button id="closeModalBtn" class="close-btn">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+
+                <div class="modal-body">
+                    <!-- Execution Overview -->
+                    <div class="execution-overview">
+                        <div class="overview-item">
+                            <span class="label">Execution ID:</span>
+                            <span id="modalExecutionId" class="value">-</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="label">Status:</span>
+                            <span id="modalStatus" class="value badge">-</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="label">Current Stage:</span>
+                            <span id="modalCurrentStage" class="value">-</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="label">Duration:</span>
+                            <span id="modalDuration" class="value">-</span>
+                        </div>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="progress-container">
+                        <div class="progress-bar">
+                            <div id="progressFill" class="progress-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-text">
+                            <span id="progressStageText">0 / 0 stages completed</span>
+                            <span id="progressPercentText">0%</span>
+                        </div>
+                    </div>
+
+                    <!-- Metrics Summary -->
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <div class="metric-icon" style="background-color: #6366f1;">
+                                <i data-lucide="users"></i>
+                            </div>
+                            <div class="metric-content">
+                                <p class="metric-label">Total Consumers</p>
+                                <p class="metric-value" id="metricConsumers">0</p>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-icon" style="background-color: #10b981;">
+                                <i data-lucide="mail"></i>
+                            </div>
+                            <div class="metric-content">
+                                <p class="metric-label">Emails Sent</p>
+                                <p class="metric-value" id="metricEmailsSent">0</p>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-icon" style="background-color: #f59e0b;">
+                                <i data-lucide="mail-open"></i>
+                            </div>
+                            <div class="metric-content">
+                                <p class="metric-label">Emails Opened</p>
+                                <p class="metric-value" id="metricEmailsOpened">0</p>
+                                <p class="metric-subtitle" id="metricOpenRate">0%</p>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-icon" style="background-color: #8b5cf6;">
+                                <i data-lucide="calendar-check"></i>
+                            </div>
+                            <div class="metric-content">
+                                <p class="metric-label">Bookings</p>
+                                <p class="metric-value" id="metricBookings">0</p>
+                                <p class="metric-subtitle" id="metricConversionRate">0%</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Stage Timeline -->
+                    <div class="stage-timeline">
+                        <h3>Stage-by-Stage Progress</h3>
+                        <div id="stageTimelineContent" class="timeline"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Consumer Timeline Modal -->
+        <div id="consumerTimelineModal" class="modal" style="display: none;">
+            <div class="modal-content workflow-modal">
+                <div class="modal-header">
+                    <h2>
+                        <i data-lucide="user"></i>
+                        Consumer Activity Timeline
+                    </h2>
+                    <button id="closeConsumerModalBtn" class="close-btn">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+
+                <div class="modal-body">
+                    <!-- Consumer Info -->
+                    <div class="execution-overview">
+                        <div class="overview-item">
+                            <span class="label">Name:</span>
+                            <span id="timelineConsumerName" class="value">-</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="label">Email:</span>
+                            <span id="timelineConsumerEmail" class="value">-</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="label">Stage:</span>
+                            <span id="timelineConsumerStage" class="value badge">-</span>
+                        </div>
+                        <div class="overview-item">
+                            <span class="label">Total Events:</span>
+                            <span id="timelineEventCount" class="value">-</span>
+                        </div>
+                    </div>
+
+                    <!-- Event Timeline -->
+                    <div class="stage-timeline">
+                        <h3>Email Activity Timeline</h3>
+                        <div id="consumerTimelineContent" class="timeline"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Creator Agents Platform | API: http://localhost:8000</p>
+        </footer>
+    </div>
+
+    <script src="/static/js/dashboard.js"></script>
+    <script src="/static/js/workflow-monitor.js"></script>
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+    </script>
+</body>
+</html>

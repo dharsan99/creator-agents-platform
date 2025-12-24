@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 from sqlmodel import Session
 
-from app.infra.db.models import AgentInvocation, Action, Event, ConsumerContext
+from app.infra.db.models import AgentInvocation, Action, Event, ConsumerContext, Agent
 from app.domain.agents.service import AgentService
 from app.domain.context.service import ConsumerContextService
 from app.domain.policy.service import PolicyService
@@ -34,6 +34,9 @@ class Orchestrator:
         """Process agents for an event and return invocation IDs.
 
         This is called asynchronously by background workers.
+
+        Phase 3 Update: Routes orchestration events to MainAgent (global supervisor)
+        and regular events to creator-specific agents.
         """
         # Get event
         event = self.session.get(Event, event_id)
@@ -47,7 +50,20 @@ class Orchestrator:
             logger.error(f"Context not found for creator {creator_id}, consumer {consumer_id}")
             return []
 
-        # Find matching agents
+        # Phase 3: Route orchestration events to MainAgent (global supervisor)
+        ORCHESTRATION_EVENTS = [
+            "creator_onboarded",
+            "workflow_metric_update",
+            "worker_task_completed",
+            "workflow_state_change",
+        ]
+
+        if event.type in ORCHESTRATION_EVENTS:
+            # Route to MainAgent only
+            logger.info(f"Routing orchestration event {event.type} to MainAgent")
+            return self._process_main_agent(creator_id, consumer_id, event_id, event, context)
+
+        # Regular events: route to creator-specific agents (backward compatibility)
         event_type = EventType(event.type)
         agents = self.agent_service.get_agents_for_event(creator_id, event_type)
 
@@ -95,6 +111,87 @@ class Orchestrator:
                 continue
 
         return invocation_ids
+
+    def _process_main_agent(
+        self,
+        creator_id: UUID,
+        consumer_id: UUID,
+        event_id: UUID,
+        event: Event,
+        context: ConsumerContext,
+    ) -> list[UUID]:
+        """Process orchestration event via MainAgent (global supervisor).
+
+        Args:
+            creator_id: Creator UUID
+            consumer_id: Consumer UUID
+            event_id: Event UUID
+            event: Event object
+            context: Consumer context
+
+        Returns:
+            List of invocation IDs (single MainAgent invocation)
+        """
+        from sqlmodel import select
+
+        # Get global MainAgent (creator_id is None)
+        statement = (
+            select(Agent)
+            .where(Agent.name == "MainAgent")
+            .where(Agent.creator_id.is_(None))
+            .where(Agent.enabled == True)
+        )
+        main_agent = self.session.exec(statement).first()
+
+        if not main_agent:
+            logger.warning("MainAgent not found or not enabled")
+            return []
+
+        try:
+            # Create invocation record
+            invocation = AgentInvocation(
+                id=uuid4(),
+                agent_id=main_agent.id,
+                creator_id=creator_id,
+                consumer_id=consumer_id,
+                trigger_event_id=event_id,
+                status=InvocationStatus.PENDING.value,
+            )
+            self.session.add(invocation)
+            self.session.commit()
+            self.session.refresh(invocation)
+
+            # Execute MainAgent
+            agent_input = self._build_agent_input(event, context)
+            agent_output = self.agent_service.execute_agent(
+                main_agent, agent_input, invocation.id
+            )
+
+            # Process planned actions
+            self._process_actions(
+                invocation.id,
+                creator_id,
+                consumer_id,
+                agent_output.actions,
+            )
+
+            logger.info(
+                f"MainAgent processed orchestration event {event.type}",
+                extra={
+                    "invocation_id": str(invocation.id),
+                    "event_id": str(event_id),
+                    "creator_id": str(creator_id),
+                }
+            )
+
+            return [invocation.id]
+
+        except Exception as e:
+            logger.error(
+                f"Failed to process MainAgent for event {event_id}: {str(e)}",
+                exc_info=True
+            )
+            return []
 
     def _build_agent_input(
         self,

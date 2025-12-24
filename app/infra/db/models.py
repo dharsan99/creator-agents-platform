@@ -93,6 +93,7 @@ class Event(SQLModel, table=True):
     __table_args__ = (
         Index("idx_events_consumer_time", "creator_id", "consumer_id", "timestamp"),
         Index("idx_events_type", "creator_id", "type", "timestamp"),
+        Index("idx_events_idempotency", "idempotency_key", unique=True),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -103,6 +104,7 @@ class Event(SQLModel, table=True):
     source: str  # system, webhook, api
     timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
     payload: dict = Field(sa_column=Column(JSON))
+    idempotency_key: Optional[str] = Field(default=None, index=True)
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -231,3 +233,41 @@ class PolicyRule(SQLModel, table=True):
 
     key: str  # rate_limit_email_weekly, quiet_hours_start, etc.
     value: dict = Field(sa_column=Column(JSON))
+
+
+# ==================== Dead Letter Queue ====================
+
+class DeadLetterQueueEntry(SQLModel, table=True):
+    """Tracks failed tasks for later retry or analysis."""
+    __tablename__ = "dead_letter_queue"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    queue_name: str = Field(index=True)  # agents, actions, default
+    original_job_id: str = Field(index=True)
+    task_name: str
+    payload: dict = Field(sa_column=Column(JSON))
+    error_message: str = Field(sa_column=Column(Text))
+
+    failed_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    retry_count: int = Field(default=0)
+    processed: bool = Field(default=False, index=True)
+
+
+# ==================== Job Metrics ====================
+
+class JobMetrics(SQLModel, table=True):
+    """Track job execution metrics for monitoring and debugging."""
+    __tablename__ = "job_metrics"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    queue_name: str = Field(index=True)  # agents, actions, default
+    job_id: str = Field(index=True)
+    task_name: str
+    status: str = Field(index=True)  # pending, running, completed, failed
+    attempts: int = Field(default=0)
+    max_attempts: int = Field(default=3)
+
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    result: Optional[dict] = Field(default=None, sa_column=Column(JSON))

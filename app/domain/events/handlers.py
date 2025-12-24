@@ -1,10 +1,14 @@
 """Event handlers for triggering side effects."""
+import logging
 from uuid import UUID
 from sqlmodel import Session
 
 from app.infra.db.models import Event
 from app.domain.context.service import ConsumerContextService
 from app.domain.types import EventType
+from app.infra.events.producer import get_producer
+
+logger = logging.getLogger(__name__)
 
 
 class EventHandler:
@@ -25,17 +29,52 @@ class EventHandler:
     def _trigger_agents(self, event: Event) -> None:
         """Queue agent invocations for this event.
 
-        In v1, this enqueues background jobs via RQ.
-        In future versions, this could publish to a message bus.
+        Uses Taskiq background jobs with Redis broker for reliability.
+        Also publishes to Redpanda for event streaming (Phase 2+).
         """
-        from app.infra.queues.tasks import enqueue_agent_invocations
+        import asyncio
+        from app.infra.queues.taskiq_tasks import enqueue_agent_invocations
 
-        enqueue_agent_invocations(
-            creator_id=str(event.creator_id),
-            consumer_id=str(event.consumer_id),
-            event_id=str(event.id),
-            event_type=event.type,
-        )
+        # Enqueue via Taskiq (async)
+        try:
+            asyncio.run(enqueue_agent_invocations(
+                creator_id=str(event.creator_id),
+                consumer_id=str(event.consumer_id),
+                event_id=str(event.id),
+                event_type=event.type,
+            ))
+        except Exception as e:
+            logger.warning(
+                f"Failed to enqueue agent invocations via Taskiq: {str(e)}"
+            )
+
+        # Phase 2+: Publish to Redpanda for event streaming
+        try:
+            producer = get_producer()
+            success = producer.publish_event(
+                topic="events",
+                creator_id=event.creator_id,
+                consumer_id=event.consumer_id,
+                event_type=event.type,
+                payload=event.payload,
+                event_id=event.id,
+                idempotency_key=event.idempotency_key,
+            )
+
+            if success:
+                logger.info(
+                    f"Published event to Redpanda: {event.type} "
+                    f"(event_id: {str(event.id)[:8]}...)"
+                )
+            else:
+                logger.warning(
+                    f"Failed to publish event to Redpanda: {event.type} "
+                    f"(event_id: {str(event.id)[:8]}...)"
+                )
+        except Exception as e:
+            logger.error(
+                f"Error publishing event to Redpanda: {str(e)}", exc_info=True
+            )
 
 
 # Event subscribers registry

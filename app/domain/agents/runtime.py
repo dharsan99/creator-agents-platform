@@ -2,11 +2,12 @@
 import importlib
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tools import StructuredTool
 from langgraph.graph import StateGraph
 from sqlmodel import Session
 
@@ -27,16 +28,82 @@ class AgentRuntime(ABC):
 
 
 class LangGraphRuntime(AgentRuntime):
-    """Runtime for LangGraph-based agents."""
+    """Runtime for LangGraph-based agents with tool binding support."""
 
     def __init__(self):
         self.graphs_cache: Dict[str, StateGraph] = {}
 
-    def execute(self, agent_config: dict, input_data: AgentInput) -> AgentOutput:
-        """Execute LangGraph agent.
+    def _convert_tools_to_langchain(
+        self, session: Optional[Session] = None
+    ) -> List[StructuredTool]:
+        """Convert BaseTool instances to LangChain StructuredTool format.
+
+        This enables LLMs in LangGraph to call tools during execution.
 
         Args:
-            agent_config: Agent configuration with 'graph_path' key
+            session: Optional database session for tools that need DB access
+
+        Returns:
+            List of LangChain StructuredTool instances
+        """
+        from app.domain.tools.registry import get_registry
+        from app.domain.tools.executor import ToolExecutor
+
+        registry = get_registry()
+        available_tools = registry.get_available_tools()
+        langchain_tools = []
+
+        for tool_name, base_tool in available_tools.items():
+            try:
+                # Create a wrapped execution function for this tool
+                def create_tool_executor(tool_name_inner: str):
+                    """Create closure to capture tool_name"""
+                    def execute_tool(**kwargs) -> Dict[str, Any]:
+                        """Execute tool and return result as dict"""
+                        executor = ToolExecutor(session=session, registry=registry)
+                        result = executor.execute(tool_name_inner, **kwargs)
+
+                        if result.success:
+                            return {
+                                "success": True,
+                                "data": result.data,
+                                "execution_time_ms": result.execution_time_ms
+                            }
+                        else:
+                            return {
+                                "success": False,
+                                "error": result.error,
+                                "execution_time_ms": result.execution_time_ms
+                            }
+
+                    return execute_tool
+
+                # Convert tool schema to LangChain format
+                langchain_tool = StructuredTool.from_function(
+                    func=create_tool_executor(tool_name),
+                    name=tool_name,
+                    description=base_tool.description,
+                    args_schema=base_tool.schema if base_tool.schema else None,
+                )
+
+                langchain_tools.append(langchain_tool)
+                logger.debug(f"Bound tool '{tool_name}' to LangGraph runtime")
+
+            except Exception as e:
+                logger.warning(
+                    f"Failed to bind tool '{tool_name}' to LangGraph: {e}"
+                )
+                continue
+
+        logger.info(f"Bound {len(langchain_tools)} tools to LangGraph runtime")
+        return langchain_tools
+
+    def execute(self, agent_config: dict, input_data: AgentInput) -> AgentOutput:
+        """Execute LangGraph agent with tool binding support.
+
+        Args:
+            agent_config: Agent configuration with 'graph_path' key and
+                          optional 'bind_tools' (bool) to enable tool calling
             input_data: Input data for the agent
 
         Returns:
@@ -49,19 +116,27 @@ class LangGraphRuntime(AgentRuntime):
         # Load the graph
         graph = self._load_graph(graph_path)
 
+        # Convert tools to LangChain format if tool binding enabled
+        langchain_tools = []
+        if agent_config.get("bind_tools", False):
+            # Get database session from agent config if available
+            session = agent_config.get("session")
+            langchain_tools = self._convert_tools_to_langchain(session)
+
         # Prepare input state
         state = {
             "creator_id": str(input_data.creator_id),
             "consumer_id": str(input_data.consumer_id),
             "event": input_data.event.model_dump(),
             "context": input_data.context.model_dump(),
-            "tools": input_data.tools,
+            "tools": langchain_tools,  # LangChain-compatible tools
+            "tool_schemas": input_data.tools,  # Original tool schemas for reference
             "actions": [],
             "reasoning": "",
         }
 
         try:
-            # Execute the graph
+            # Execute the graph with tool support
             result = graph.invoke(state)
 
             # Extract actions from result
@@ -188,7 +263,13 @@ class SimpleAgentRuntime(AgentRuntime):
         agent_class = self._load_agent_class(agent_class_path)
 
         # Instantiate the agent
-        agent_instance = agent_class(agent_config)
+        # Check if agent accepts session parameter (e.g., MainAgent)
+        import inspect
+        sig = inspect.signature(agent_class.__init__)
+        if 'session' in sig.parameters:
+            agent_instance = agent_class(agent_config, session=self.session)
+        else:
+            agent_instance = agent_class(agent_config)
 
         # Get the actual database models from IDs
         from app.infra.db.models import Event, ConsumerContext
